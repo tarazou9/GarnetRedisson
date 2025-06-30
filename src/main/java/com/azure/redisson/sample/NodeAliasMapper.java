@@ -1,4 +1,4 @@
-package com.example;
+package com.azure.redisson.sample;
 import java.util.HashMap;
 import java.util.Map;
 

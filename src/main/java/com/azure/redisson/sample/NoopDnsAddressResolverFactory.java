@@ -1,4 +1,4 @@
-package com.example;
+package com.azure.redisson.sample;
 
 import io.netty.channel.socket.DatagramChannel;
 import io.netty.channel.socket.SocketChannel;
@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.util.Map;
 
 import org.redisson.connection.DnsAddressResolverGroupFactory;
+
 import io.netty.resolver.dns.DnsAddressResolverGroup;
 
 public class NoopDnsAddressResolverFactory extends DnsAddressResolverGroupFactory {

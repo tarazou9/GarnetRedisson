@@ -1,18 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-package com.example;
+package com.azure.redisson.sample;
 
 import com.azure.core.credential.AccessToken;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.credential.TokenRequestContext;
-import com.azure.identity.DefaultAzureCredential;
-import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.identity.ManagedIdentityCredential;
+import com.azure.identity.ManagedIdentityCredentialBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-
-import io.netty.resolver.AddressResolverGroup;
-import io.netty.resolver.dns.DnsServerAddressStreamProvider;
 
 import org.redisson.Redisson;
 import org.redisson.api.RBucket;
@@ -20,26 +17,19 @@ import org.redisson.api.RBuckets;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.RedisAuthRequiredException;
 import org.redisson.client.RedisConnectionException;
-import org.redisson.client.RedisException;
 import org.redisson.client.RedisWrongPasswordException;
 import org.redisson.config.Config;
 import org.redisson.config.SslVerificationMode;
 import org.redisson.config.TransportMode;
-import org.redisson.connection.DnsAddressResolverGroupFactory;
 
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ThreadLocalRandom;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 /**
@@ -53,28 +43,31 @@ public class AuthenticateWithTokenCache {
      * @param args Ignored.
      */
     public static void main(String[] args) {
-
-        Logger logger = LoggerFactory.getLogger(AuthenticateWithTokenCache.class);
-        logger.debug("DEBUG test message");
-        logger.info("INFO test message");
-
         // TODO: make sure to run "az login --use-device-code" before running this.
-        //Construct a Token Credential from Identity library, e.g. DefaultAzureCredential / ClientSecretCredential / Client CertificateCredential / ManagedIdentityCredential etc.
-        DefaultAzureCredential defaultAzureCredential = new DefaultAzureCredentialBuilder().build();
+        // Construct a Token Credential from Identity library, e.g. DefaultAzureCredential / ClientSecretCredential / Client CertificateCredential / ManagedIdentityCredential etc.
+        // DefaultAzureCredential defaultAzureCredential = new DefaultAzureCredentialBuilder().build();
+                
+        // Replace with your MI's client ID
+        String managedIdentityClientId = "b7ac4f18-2ebc-4c19-b708-f89974514eda";
+        String entraScope = "https://management.azure.com/.default";
+
+        // Create a credential for a specific user-assigned managed identity
+        ManagedIdentityCredential defaultAzureCredential = new ManagedIdentityCredentialBuilder()
+            .clientId(managedIdentityClientId)
+            .build();
 
         // Fetch a Microsoft Entra token to be used for authentication. This token will be used as the password.
-        // TODO: the scope will be switching to "https://cosmos.azure.com/.default"
-        TokenRequestContext trc = new TokenRequestContext().addScopes("https://management.azure.com/.default");
+        TokenRequestContext trc = new TokenRequestContext().addScopes(entraScope);
 
         // Instantiate the Token Refresh Cache, this cache will proactively refresh the access token 2 - 5 minutes before expiry.
-        GarnetClientTokenProvider tokenProvider = new GarnetClientTokenProvider(defaultAzureCredential, trc);
-        AccessToken accessToken = tokenProvider.getAccessToken();
+        TokenRefreshCache tokenRefreshCache = new TokenRefreshCache(defaultAzureCredential, trc);
+        AccessToken accessToken = tokenRefreshCache.getAccessToken();
         String username = extractUsernameFromToken(accessToken.getToken());
+        System.out.println("Username: " + username);
 
-        // Create Redisson Client
-        // Host Name, Port, and Microsoft Entra token are required here.
-        // TODO: Replace <HOST_NAME> with Garnet data node private IP.
-        RedissonClient redisson = createRedissonClient("rediss://10.41.0.54:6379", username, accessToken);
+        // Create Redisson Client. Host Name, Port, and Microsoft Entra token are required here.
+        String address = "rediss://" + NodeAliasMapper.HOST_ALIAS_MAP.get("dc1000000") + ":6379"; // any node, Redisson will do auto discovery as a cluster for other nodes
+        RedissonClient redisson = createRedissonClient(address, username, accessToken);
         System.out.println("RedissonClient created.");
         int maxTries = 3;
         int i = 0;
@@ -82,14 +75,14 @@ public class AuthenticateWithTokenCache {
         while (i < maxTries) {
             try {
                 // perform operations
-                System.out.println("Trying to access Redis...");
+                System.out.println("Trying to access Garnet...");
                 RBuckets rBuckets = redisson.getBuckets();
                 System.out.println("Trying to set key");
-                RBucket<String> bucket = redisson.getBucket("Az:key");
+                RBucket<String> bucket = redisson.getBucket("TestKey");
                 bucket.set("This is object value");
 
                 String objectValue = bucket.get().toString();
-                System.out.println("stored object value: " + objectValue);
+                System.out.println("Stored object value: " + objectValue);
                 break;
             } catch (RedisConnectionException exception) {          
                 Throwable rootCause = exception;
@@ -104,13 +97,11 @@ public class AuthenticateWithTokenCache {
                     if (redisson != null) {
                         redisson.shutdown();
                     }
-                    AccessToken token = tokenProvider.getAccessToken();
-                    // Recreate the client with a fresh token non-expired token as password for
-                    // authentication.
-                    redisson = createRedissonClient("rediss://10.41.0.54:6379", username, token);
+                    AccessToken token = tokenRefreshCache.getAccessToken();
+                    // Recreate the client with a fresh token non-expired token as password for authentication.
+                    redisson = createRedissonClient(address, username, token);
                 } else {
                     exception.printStackTrace();
-                    System.out.println("Im here");
                 } 
             } catch (Exception e) {
                 // Handle Exception as required
@@ -123,19 +114,19 @@ public class AuthenticateWithTokenCache {
     }
 
 
-    // Helper Code
+     /**
+     * Create Redisson Client with username and token.
+     */
     private static RedissonClient createRedissonClient(String address, String username, AccessToken accessToken) {
         Config config = new Config();
         config.setTransportMode(TransportMode.NIO);
 
         System.out.println("Creating RedissonClient...");
-        System.out.println("username " + username);
+        System.out.println("Username " + username);
 
         config.useClusterServers()
             .setDnsMonitoringInterval(-1) // prevent use of alias like dc1000005
-            .addNodeAddress(
-                "rediss://10.41.0.54:6379" // any node, Redisson will do auto discovery as a cluster for other nodes
-            )
+            .addNodeAddress(address)
             .setUsername(username)
             .setPassword(accessToken.getToken())
             .setSslVerificationMode(SslVerificationMode.NONE);
@@ -146,22 +137,27 @@ public class AuthenticateWithTokenCache {
         return Redisson.create(config);
     }
 
-    /**
+
+     /**
      * The token cache to store and proactively refresh the access token.
      */
-    public static class GarnetClientTokenProvider {
+    public static class TokenRefreshCache {
         private final TokenCredential tokenCredential;
         private final TokenRequestContext tokenRequestContext;
+        private final Timer timer;
         private volatile AccessToken accessToken;
+        private final Duration maxRefreshOffset = Duration.ofMinutes(5);
+        private final Duration baseRefreshOffset = Duration.ofMinutes(2);
 
         /**
          * Creates an instance of TokenRefreshCache
          * @param tokenCredential the token credential to be used for authentication.
          * @param tokenRequestContext the token request context to be used for authentication.
          */
-        public GarnetClientTokenProvider(TokenCredential tokenCredential, TokenRequestContext tokenRequestContext) {
+        public TokenRefreshCache(TokenCredential tokenCredential, TokenRequestContext tokenRequestContext) {
             this.tokenCredential = tokenCredential;
             this.tokenRequestContext = tokenRequestContext;
+            this.timer = new Timer();
         }
 
         /**
@@ -172,9 +168,26 @@ public class AuthenticateWithTokenCache {
             if (accessToken != null) {
                 return  accessToken;
             } else {
+                TokenRefreshTask tokenRefreshTask = new TokenRefreshTask();
                 accessToken = tokenCredential.getToken(tokenRequestContext).block();
+                timer.schedule(tokenRefreshTask, getTokenRefreshDelay());
                 return accessToken;
             }
+        }
+
+        private class TokenRefreshTask extends TimerTask {
+            // Add your task here
+            public void run() {
+                accessToken = tokenCredential.getToken(tokenRequestContext).block();
+                System.out.println("Refreshed Token with Expiry: " + accessToken.getExpiresAt().toEpochSecond());
+                timer.schedule(new TokenRefreshTask(), getTokenRefreshDelay());
+            }
+        }
+
+        private long getTokenRefreshDelay() {
+            return ((accessToken.getExpiresAt()
+                .minusSeconds(ThreadLocalRandom.current().nextLong(baseRefreshOffset.getSeconds(), maxRefreshOffset.getSeconds()))
+                .toEpochSecond() - OffsetDateTime.now().toEpochSecond()) * 1000);
         }
     }
 

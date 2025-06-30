@@ -1,4 +1,4 @@
-package com.example;
+package com.azure.redisson.sample;
 
 import io.netty.resolver.AddressResolver;
 import io.netty.util.concurrent.Future;
