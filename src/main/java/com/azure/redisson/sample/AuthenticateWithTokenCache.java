@@ -62,7 +62,6 @@ public class AuthenticateWithTokenCache {
         TokenRefreshCache tokenRefreshCache = new TokenRefreshCache(defaultAzureCredential, trc);
         AccessToken accessToken = tokenRefreshCache.getAccessToken();
         String username = extractUsernameFromToken(accessToken.getToken());
-        System.out.println("Username: " + username);
 
         // Create Redisson Client. Host Name, Port, and Microsoft Entra token are required here.
         String address = "rediss://" + NodeAliasMapper.HOST_ALIAS_MAP.get("dc1000000") + ":6379"; // any node, Redisson will do auto discovery as a cluster for other nodes
