@@ -43,11 +43,10 @@ public class AuthenticateWithTokenCache {
      * @param args Ignored.
      */
     public static void main(String[] args) {
-        // TODO: make sure to run "az login --use-device-code" before running this.
-        // Construct a Token Credential from Identity library, e.g. DefaultAzureCredential / ClientSecretCredential / Client CertificateCredential / ManagedIdentityCredential etc.
+        // To construct a token credential from default az login user.
         // DefaultAzureCredential defaultAzureCredential = new DefaultAzureCredentialBuilder().build();
                 
-        // Replace with your MI's client ID
+        // To construct a token credential from Managed Identity. Replace with your MI's client ID
         String managedIdentityClientId = "b7ac4f18-2ebc-4c19-b708-f89974514eda";
         String entraScope = "https://management.azure.com/.default";
 
@@ -73,7 +72,7 @@ public class AuthenticateWithTokenCache {
         int i = 0;
 
         while (i < maxTries) {
-            try {
+            try {          
                 // perform operations
                 System.out.println("Trying to access Garnet...");
                 RBuckets rBuckets = redisson.getBuckets();
